@@ -11,12 +11,12 @@
 ## Cell 1 — Markdown: title & purpose
 
 ```markdown
-# Data Profiling — [primary dataset name]
+# Data Profiling — Open-Meteo Historical Weather Inputs (Barcelona)
 
-**Purpose:** describe the dataset's shape, distributions, gaps, and anomalies
-so we know what we have before building any pipeline on it.
+**Purpose:** describe the climate dataset's shape, distributions, gaps, and anomalies
+so we know what we have before building the Barcelona passive-design scorecard.
 
-**Input:** [path or URL to data]
+**Input:** Barcelona hourly weather export from Open-Meteo or the local CSV cache of API pulls.
 **Output:** a list of findings written into `docs/data-quality-audit.md`.
 ```
 
@@ -38,7 +38,7 @@ pd.set_option("display.max_rows", 100)
 > NetCDF use `xarray`, for shapefiles use `geopandas`.
 
 ```python
-df = pd.read_csv("../data/your-dataset.csv")
+df = pd.read_csv("../data/open-meteo-barcelona.csv")
 df.head()
 ```
 
@@ -78,7 +78,7 @@ for col in cat_cols:
 
 ## Cell 8 — Temporal coverage
 
-> Adapt to your date column name.
+> Adapt to the actual timestamp column if the export uses a different name.
 
 ```python
 df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -101,17 +101,20 @@ if missing_days:
 ## Cell 10 — Spatial coverage *(if dataset has lat/lon)*
 
 ```python
-print(f"Lat range: {df['lat'].min():.4f} → {df['lat'].max():.4f}")
-print(f"Lon range: {df['lon'].min():.4f} → {df['lon'].max():.4f}")
-print(f"Unique locations: {df[['lat', 'lon']].drop_duplicates().shape[0]:,}")
+if {"lat", "lon"}.issubset(df.columns):
+    print(f"Lat range: {df['lat'].min():.4f} → {df['lat'].max():.4f}")
+    print(f"Lon range: {df['lon'].min():.4f} → {df['lon'].max():.4f}")
+    print(f"Unique locations: {df[['lat', 'lon']].drop_duplicates().shape[0]:,}")
+else:
+    print("No lat/lon columns in this export; spatial coverage is represented by the query location.")
 ```
 
 ## Cell 11 — Visualization 1: distribution of one key variable
 
 ```python
 fig, ax = plt.subplots(figsize=(10, 5))
-sns.histplot(df["your_key_variable"], bins=50, ax=ax)
-ax.set_title("Distribution of your_key_variable")
+sns.histplot(df["temperature"], bins=50, ax=ax)
+ax.set_title("Distribution of hourly dry-bulb temperature")
 plt.tight_layout()
 plt.show()
 ```
@@ -147,15 +150,13 @@ Look at the cells above and list every weird thing. Examples:
 ```markdown
 ## What did profiling reveal that we didn't know?
 
-1. 
-2. 
-3. 
+1. Hourly temperature, humidity, wind, and solar inputs are available at the right cadence for the scorecard.
+2. Timestamp normalization is necessary because the same data behaves differently in UTC versus Barcelona local time.
+3. The dataset is useful for climate screening, but not enough on its own for street-level microclimate claims.
 
-**Implications for the brief:** [one paragraph — does any finding force a
-revision? if so, capture it in `problem-brief-v2.md`]
+**Implications for the brief:** This confirms the brief should stay framed as a calculation-based passive-design scorecard rather than an indoor comfort prediction. The climate layer supports the scoring logic, but the geometry and urban-context layers are still required for strategy checks.
 
-**Implications for the pipeline (Session 3):** [one paragraph — what cleaning
-steps will we need to do, given what we just learned?]
+**Implications for the pipeline (Session 3):** We need timezone correction, column harmonization, and a clean join between weather records and building geometry before any strategy scoring can run. We also need to keep a simple data dictionary so the team uses the same column names in the notebook and the audit.
 ```
 
 ## Cell 15 — Save profile summary
@@ -165,7 +166,7 @@ steps will we need to do, given what we just learned?]
 
 ```python
 profile_summary = {
-    "dataset": "[name]",
+    "dataset": "Open-Meteo Historical Weather Inputs (Barcelona)",
     "rows": int(df.shape[0]),
     "cols": int(df.shape[1]),
     "missing_pct": missing.to_dict(),
