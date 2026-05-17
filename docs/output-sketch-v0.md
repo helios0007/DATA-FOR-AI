@@ -1,101 +1,106 @@
-# Output Sketch v0
+# Output Sketch v0 — Passive Design Advisor: Barcelona 2025
 
-> One page. Hand-drawn is fine. This is what the user sees at the end of
-> Session 7.
+> Repo-aligned version regenerated after reviewing the current brief and dataset inventory.
 >
-> By Session 7 you are not delivering a graph. You are delivering something
-> a professional can act on. Start sketching what that thing looks like
-> today, even if it changes 5 times.
->
-> Not a product spec. A sketch. The point: you can't know what data you
-> need until you know what you're delivering.
->
-> Save as `docs/output-sketch-v0.md` in your repo.
+> The output is not a graph and not a final simulation report. It is a **first-pass design decision card** that helps an architect decide which passive strategies are physically worth testing further.
 
 ---
 
 ## What is the final output?
 
-*Choose one form and describe it in one sentence.*
-
-- [ ] Dashboard *(interactive web UI with maps / filters / tables)*
-- [ ] Annotated map / report *(static, designed to be read)*
-- [ ] Notebook tool *(Jupyter notebook with parameter cells, designed to be
-      opened, tweaked, re-run by the user)*
-- [ ] Web tool / app
+- [x] Web tool / app
+- [x] Annotated report-style result card
+- [ ] Dashboard
+- [ ] Notebook tool
 - [ ] Grasshopper component / Rhino plugin
 - [ ] API service
-- [ ] Other: 
+- [ ] Other:
 
 **One-sentence description of the output:**
 
-> 
+> A web-based Passive Design Advisor that takes a Barcelona site location and simplified building geometry, then returns a ranked strategy card showing which passive design actions are YES / PARTIAL / NO, their estimated impact, the indicators behind the decision, and the data limitations.
 
 ---
 
 ## Who is the user?
 
-*Be specific. A person with a job title and a moment of use. Not a category
-("urban planners") — a person ("a capital planning analyst at the Barcelona
-Urban Resilience Office, on Tuesday morning, deciding which 5 buildings get
-priority retrofit funding").*
-
-> 
+> An architect working on a proposed building in Barcelona during early design stage, before committing to façade, roof, ventilation, or massing strategies.
 
 ### What does the user already know?
 
-*What's their professional context? What tools do they already use?*
-
-- 
+- The approximate site location.
+- The early massing or basic building geometry.
+- Façade orientation and approximate WWR.
+- Roof area and exposure intention.
+- Basic room depth / plan depth assumptions.
+- Whether operable openings and thermal mass are being considered.
 
 ### What does the user NOT know?
 
-*What's the gap your output fills?*
-
-- 
+- Whether local climate, wind, solar exposure, and urban morphology make each passive strategy physically suitable.
+- Whether a passive strategy is likely to have high, medium, or low impact at this site.
+- Which data assumptions or limitations affect the recommendation.
+- Whether the strategy should be tested further in a full simulation workflow.
 
 ---
 
 ## The top 3 actions this output enables
 
-*Each action should be concrete: a thing the user does after looking at
-the output. "Raises awareness" is not an action. "Adds 3 buildings to
-the shortlist" is.*
-
-1. 
-2. 
-3. 
+1. Select 2–3 passive strategies worth developing further in the design process.
+2. Identify which geometric inputs should be adjusted first, such as WWR, façade shading, plan depth, openings, roof use, or construction type.
+3. Decide whether the project needs deeper simulation, revised geometry, or additional site/context data before making design commitments.
 
 ---
 
 ## Sketch
 
-*Embed an image. Hand-drawn on paper, photographed. Figma wireframe.
-Excalidraw. Screenshot of an analogous existing tool with annotations.
-Whatever — one image, one page.*
-
 ![Output sketch](./sketches/output-sketch-v0.png)
 
-> If you're not ready for an image yet, write a 4-bullet description of the
-> visual layout: what's at the top, the center, the side panel, the bottom.
+If the image is not ready yet, use this layout:
+
+- **Top bar:** project location, selected climate file, confidence status, and “not a full simulation” warning.
+- **Left panel:** user input summary — location, façade orientation, WWR, roof area, room depth, operable openings, construction type.
+- **Centre panel:** ranked passive strategy cards — exterior shading, cross-ventilation, night purge, thermal mass, green roof.
+- **Right panel:** evidence and uncertainty — key indicators, thresholds, source datasets, limitations, and RAG-supported explanation.
+- **Bottom strip:** next action — “test in full simulation”, “revise geometry”, “collect missing input”, or “proceed with concept”.
+
+---
+
+## Suggested visual hierarchy
+
+### 1. Strategy ranking cards
+
+| Strategy | Precondition | Impact | Confidence | Main reason |
+|---|---|---|---|---|
+| Exterior shading | YES | HIGH | High | West/south exposure + high summer solar risk + high WWR |
+| Cross-ventilation | PARTIAL | MEDIUM | Medium | Wind direction useful, but room depth/openings may limit airflow |
+| Night purge | YES | MEDIUM | Medium | Night temperature drop exists, but urban heat may reduce effect |
+| Thermal mass | PARTIAL | MEDIUM | Medium | Useful if paired with night cooling, weaker if no ventilation |
+| Green roof | YES | LOW–MEDIUM | Medium | Roof exposed; local cooling benefit depends on depth/irrigation/design |
+
+### 2. Indicator explanation block
+
+Each strategy card should show:
+
+- **Input used:** e.g. WWR, orientation, roof area, room depth.
+- **Climate indicator:** e.g. overheating hours, night temperature drop, wind direction.
+- **Urban indicator:** e.g. canyon ratio, obstruction, local thermal comfort zone.
+- **Rule:** e.g. “IF west façade + high solar risk + WWR > threshold → shading priority high.”
+- **Confidence:** high / medium / low.
+- **Limitation:** one short caveat.
 
 ---
 
 ## What this output is NOT
 
-*Two bullets. Protects against scope creep. Be honest.*
-
-- 
-- 
+- It is not a certified energy simulation or regulatory compliance report.
+- It is not a prediction of actual indoor thermal comfort in an existing building.
 
 ---
 
 ## What would make a user trust this output?
 
-*One bullet. Forces you to think about uncertainty communication early —
-this gets revisited in Session 7.*
-
-- 
+- Every recommendation must expose the evidence chain: **input → indicator → threshold/rule → result → limitation**.
 
 ---
 
@@ -103,18 +108,18 @@ this gets revisited in Session 7.*
 
 | Seminar artifact | How it feeds into this output |
 |---|---|
-| Problem brief (v2) | The decision this output supports |
-| Datasheets | Provenance shown to the user (citation, source, license) |
-| Quality audit | Limitations shown to the user (what to trust, what not to) |
-| Decision map | The questions this output answers |
-| System sketch | The pipeline behind this output |
-| (Future) Model card | What the model does, doesn't, and might fail at |
-| (Future) Failure gallery | The "known failures" disclosure |
+| Problem brief (v2) | Defines the prescriptive design-stage decision and excludes existing-building diagnosis. |
+| Datasheets | Provide provenance, coverage, license, and limitations for each adopted dataset. |
+| Quality audit | Defines what to trust, what not to trust, and which indicators require caveats. |
+| Decision map | Links each user-facing claim to the datasets that support it. |
+| System sketch | Shows how data flows from source to rule engine to explanation. |
+| Future model card | Explains what the rule engine / optional model does and does not do. |
+| Future failure gallery | Shows known bad cases such as missing geometry, outdated UHI layers, or incomplete OSM context. |
 
 ---
 
 ## Sign-off
 
-**Team:** [names]
-**Sketched by:** [name]
-**Last updated:** [YYYY-MM-DD]
+**Team:** Gaelle Habib, Chun-Chun Chang, Nithik Vairamuthu, Vimal TN  
+**Sketched by:** [name]  
+**Last updated:** 2026-05-17
