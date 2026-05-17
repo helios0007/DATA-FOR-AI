@@ -115,7 +115,7 @@
   - Confirmed 0 missing values in all primary fields
   - Key statistics confirmed from file: summer (JJA) mean dry bulb 23.7°C, peak 31.4°C; winter (DJF) mean 10.3°C, min 3.0°C; July average diurnal swing 6.5°C
 
-- **Where is the preprocessing software / code available?** no preprocessing was required for the .epw file.
+- **Where is the preprocessing software / code available?** scripts\parse_epw.py for parsing, and outputs\epw_summary.json for parsing output.
 
 ---
 
