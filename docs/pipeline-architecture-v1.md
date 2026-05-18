@@ -231,6 +231,6 @@ flowchart LR
 
 ## Sign-off
 
-**Drawn by:** Passive Design Advisor team  
+**Drawn by:** Chun-Chun Chang 
 **Last updated:** 2026-05-18  
 **Diagram updated to match `src/clean_data.py`:** yes for EPW cleaning; planned boxes explicitly marked
