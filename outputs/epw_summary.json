@@ -7,7 +7,7 @@
     "longitude": 2.07,
     "elevation_m": 5.0,
     "timezone_utc_offset": 1.0,
-    "epw_file": "ESP_CT_Barcelona-El_Prat_AP_081810_TMYx.epw"
+    "epw_file": "ESP_CT_Barcelona-El.Prat.AP.081810_TMYx.epw"
   },
   "monthly_stats": {
     "1": {
