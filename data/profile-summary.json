@@ -1,0 +1,53 @@
+{
+  "dataset": "ESP_CT_Barcelona-El.Prat.AP.081810_TMYx.epw",
+  "source": "Climate.OneBuilding.org — NCEI ISD/ERA5, period of record 1973–2023",
+  "rows": 8760,
+  "cols": 35,
+  "site": {
+    "city": "Barcelona-El.Prat.AP",
+    "country": "ESP",
+    "latitude": 41.2928,
+    "longitude": 2.07,
+    "elevation_m": 5.0,
+    "timezone_utc_offset": 1.0
+  },
+  "temporal_coverage": {
+    "synthetic_year": "2001-01-01 → 2001-12-31 (re-indexed)",
+    "real_source_years": {
+      "Jan": 1999,
+      "Feb": 1989,
+      "Mar": 2011,
+      "Apr": 2009,
+      "May": 2016,
+      "Jun": 1996,
+      "Jul": 2014,
+      "Aug": 2008,
+      "Sep": 2009,
+      "Oct": 1999,
+      "Nov": 1987,
+      "Dec": 2020
+    },
+    "missing_hours": 0,
+    "duplicate_timestamps": 0
+  },
+  "missing_pct": {},
+  "key_stats": {
+    "annual_mean_temp_C": 16.53,
+    "annual_max_temp_C": 31.4,
+    "annual_min_temp_C": 3.0,
+    "summer_mean_temp_C": 23.71,
+    "annual_CDH_above_26C": 1014.1,
+    "annual_mean_GHI_Wh_m2": 187.3,
+    "annual_mean_wind_m_s": 3.93,
+    "dominant_wind_sector": "N (32.6%)",
+    "calm_pct": 0.0,
+    "night_purge_below22C_summer_pct": 28.3
+  },
+  "anomalies": [
+    "TMYx month-splicing: 11 different source years — synthetic re-indexing required",
+    "Zero calm hours (0.0%) — airport minimum wind threshold, not true calm",
+    "Night purge limited: only 28.3% of summer nights below 22°C",
+    "High summer RH (65–75%) — humid coastal, not dry Mediterranean",
+    "Bimodal wind: N dominant (32.6%), SW secondary (15.3%)"
+  ]
+}
