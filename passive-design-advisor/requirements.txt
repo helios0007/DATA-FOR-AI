@@ -1,0 +1,17 @@
+ifcopenshell>=0.7.0
+geopandas>=0.14.0
+pvlib>=0.10.0
+pandas>=2.0.0
+numpy>=1.24.0
+shapely>=2.0.0
+pyproj>=3.5.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+networkx>=3.1
+anthropic>=0.25.0
+python-dotenv>=1.0.0
+rich>=13.0.0
+pypdf>=3.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9

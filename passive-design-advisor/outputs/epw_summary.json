@@ -1,0 +1,20 @@
+{
+  "epw_file": "data\\ESP_CT_Barcelona-El.Prat.AP.081810_TMYx.epw",
+  "location": {
+    "latitude": 41.2928,
+    "longitude": 2.07,
+    "elevation_m": 5.0,
+    "timezone": 1.0
+  },
+  "july_diurnal_swing_C": 6.54,
+  "summer_mean_temp_C": 23.71,
+  "summer_peak_temp_C": 31.4,
+  "summer_CDH_above_26C": 960.5,
+  "dominant_wind_direction": "N",
+  "summer_mean_wind_m_s": 3.94,
+  "night_purge_hours_below_22C": 469,
+  "july_EN16798_upper_C": 28.79,
+  "july_ASHRAE55_upper_C": 29.96,
+  "summer_mean_GHI_Wh_m2": 275.9,
+  "summer_peak_GHI_Wh_m2": 945.0
+}
