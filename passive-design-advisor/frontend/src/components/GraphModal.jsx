@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-const API = 'http://localhost:8000'
 const W = 900
 const H = 560
 
@@ -110,7 +109,7 @@ export default function GraphModal({ open, onClose }) {
   useEffect(() => {
     if (!open) return
     setErr(null)
-    fetch(`${API}/api/graph`)
+    fetch('/api/graph')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(data => {
         const p = initPos(data.nodes)

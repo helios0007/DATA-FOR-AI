@@ -10,6 +10,7 @@ from typing import Optional
 import ifcopenshell
 import ifcopenshell.geom
 import ifcopenshell.util.element
+import ifcopenshell.util.unit
 import numpy as np
 
 # ── Construction mass mapping ────────────────────────────────────────────────
@@ -43,6 +44,10 @@ OPERABLE_TYPES = {
     "PIVOT_HORIZONTAL", "PIVOT_VERTICAL",
     "SLIDING",
 }
+
+# Triangles whose unit normal has |nz| below this are treated as vertical
+# (wall face) candidates.
+VERTICAL_NZ_LIMIT = 0.6
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -104,56 +109,100 @@ def normal_to_compass_bearing(normal: np.ndarray) -> float:
     return float((angle + 360) % 360)
 
 
-def get_wall_outward_normal(wall, settings) -> Optional[np.ndarray]:
+def get_element_triangles(element, settings) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """
-    Returns the dominant outward-facing normal of a wall [x, y, z].
-    Computed by averaging face normals weighted by face area.
-    Returns None if geometry extraction fails.
+    Triangulate an element. Returns (unit_normals, areas, centroids) arrays,
+    one row per triangle, or None if geometry extraction fails.
     """
     try:
-        shape = ifcopenshell.geom.create_shape(settings, wall)
+        shape = ifcopenshell.geom.create_shape(settings, element)
         verts = np.array(shape.geometry.verts).reshape(-1, 3)
-        faces = np.array(shape.geometry.faces).reshape(-1, 3)
-
-        normals = []
-        areas = []
-        for tri in faces:
-            v0, v1, v2 = verts[tri[0]], verts[tri[1]], verts[tri[2]]
-            edge1 = v1 - v0
-            edge2 = v2 - v0
-            cross = np.cross(edge1, edge2)
-            area = np.linalg.norm(cross) / 2.0
-            if area > 1e-6:
-                normals.append(cross / (2.0 * area))
-                areas.append(area)
-
-        if not normals:
+        tris  = np.array(shape.geometry.faces).reshape(-1, 3)
+        if len(tris) == 0:
             return None
 
-        weighted = np.average(normals, axis=0, weights=areas)
-        norm = np.linalg.norm(weighted[:2])  # only XY for compass bearing
-        if norm < 1e-6:
+        v0 = verts[tris[:, 0]]
+        v1 = verts[tris[:, 1]]
+        v2 = verts[tris[:, 2]]
+        cross = np.cross(v1 - v0, v2 - v0)
+        areas = np.linalg.norm(cross, axis=1) / 2.0
+        keep  = areas > 1e-8
+        if not keep.any():
             return None
-        return weighted / np.linalg.norm(weighted)
 
+        normals   = cross[keep] / (2.0 * areas[keep])[:, None]
+        centroids = (v0[keep] + v1[keep] + v2[keep]) / 3.0
+        return normals, areas[keep], centroids
     except Exception:
         return None
 
 
+def get_dominant_face(
+    normals: np.ndarray,
+    areas: np.ndarray,
+    centroids: np.ndarray,
+) -> Optional[tuple[np.ndarray, float, np.ndarray]]:
+    """
+    Find the dominant vertical face of a wall solid.
+
+    A closed solid's area-weighted normal sum is ~zero (faces cancel pairwise),
+    so instead we bin vertical triangles by compass bearing and take the bin
+    cluster with the largest total area — that is one of the wall's two big
+    faces. Returns (unit_normal, face_area, face_centroid) or None.
+    """
+    vertical = np.abs(normals[:, 2]) < VERTICAL_NZ_LIMIT
+    if not vertical.any():
+        return None
+
+    v_normals   = normals[vertical]
+    v_areas     = areas[vertical]
+    v_centroids = centroids[vertical]
+
+    bearings = (np.degrees(np.arctan2(v_normals[:, 0], v_normals[:, 1])) + 360) % 360
+    n_bins   = 16
+    bin_idx  = (bearings / (360 / n_bins)).astype(int) % n_bins
+
+    # Accumulate area per bin including immediate neighbours so a face that
+    # straddles a bin boundary is not split.
+    bin_area = np.zeros(n_bins)
+    for b in range(n_bins):
+        bin_area[b] = v_areas[bin_idx == b].sum()
+    smoothed = bin_area + np.roll(bin_area, 1) + np.roll(bin_area, -1)
+
+    best = int(np.argmax(smoothed))
+    members = np.isin(bin_idx, [(best - 1) % n_bins, best, (best + 1) % n_bins])
+    if not members.any():
+        return None
+
+    face_area     = float(v_areas[members].sum())
+    mean_normal   = np.average(v_normals[members], axis=0, weights=v_areas[members])
+    norm          = np.linalg.norm(mean_normal)
+    if norm < 1e-9 or face_area < 1e-6:
+        return None
+    face_centroid = np.average(v_centroids[members], axis=0, weights=v_areas[members])
+    return mean_normal / norm, face_area, face_centroid
+
+
 def get_element_area(element, settings) -> float:
-    """Extract gross surface area from IFC geometry (m²)."""
-    try:
-        shape = ifcopenshell.geom.create_shape(settings, element)
-        verts = np.array(shape.geometry.verts).reshape(-1, 3)
-        faces = np.array(shape.geometry.faces).reshape(-1, 3)
-        total = 0.0
-        for tri in faces:
-            v0, v1, v2 = verts[tri[0]], verts[tri[1]], verts[tri[2]]
-            cross = np.cross(v1 - v0, v2 - v0)
-            total += np.linalg.norm(cross) / 2.0
-        return float(total)
-    except Exception:
+    """Extract gross surface area from IFC geometry (m², all faces)."""
+    tri = get_element_triangles(element, settings)
+    if tri is None:
         return 0.0
+    _, areas, _ = tri
+    return float(areas.sum())
+
+
+def get_projected_area(element, settings) -> float:
+    """
+    Horizontal projected (footprint) area of an element in m².
+    Sums |n_z|·area over all triangles, which counts top and bottom faces of a
+    slab once each, then halves to get the one-sided footprint.
+    """
+    tri = get_element_triangles(element, settings)
+    if tri is None:
+        return 0.0
+    normals, areas, _ = tri
+    return float(np.sum(np.abs(normals[:, 2]) * areas) / 2.0)
 
 
 # ── Material / construction helpers ─────────────────────────────────────────
@@ -215,28 +264,34 @@ def is_exterior_wall(wall) -> bool:
     return True  # assume exterior if unknown
 
 
-def get_shading_factor(wall, model) -> float:
+def get_shading_factor(wall, model, settings, wall_centroid: Optional[np.ndarray]) -> float:
     """
-    Detect shading devices associated with wall.
-    Returns 0.3 (partial), 0.5 (overhang), or 1.0 (unshaded).
+    Solar transmission factor for the facade:
+      1.0 = unshaded, 0.5 = overhang nearby, 0.3 = other shading device nearby.
+
+    A shading device only counts if its centroid lies within 5 m of the wall —
+    a device elsewhere in the model must not shade this facade.
+    IfcShadingDevice does not exist in the IFC2x3 schema; those files are
+    treated as unshaded.
     """
     try:
-        for rel in model.by_type("IfcRelAssignsToProduct"):
-            pass  # placeholder — check shading elements below
+        devices = model.by_type("IfcShadingDevice")
+    except RuntimeError:
+        return 1.0  # schema (e.g. IFC2x3) has no IfcShadingDevice entity
+    if not devices or wall_centroid is None:
+        return 1.0
 
-        wall_id = wall.GlobalId
-        for el in model.by_type("IfcShadingDevice"):
-            # Check if shading device is spatially related to this wall
-            shading_type = getattr(el, "ShadingDeviceType", None)
-            if shading_type == "OVERHANG":
-                return 0.5
-            return 0.3
-
-        for el_type in ("IfcShading", "IfcAnnotation"):
-            for el in model.by_type(el_type):
-                return 0.3
-    except Exception:
-        pass
+    for device in devices:
+        tri = get_element_triangles(device, settings)
+        if tri is None:
+            continue
+        _, areas, centroids = tri
+        device_centroid = np.average(centroids, axis=0, weights=areas)
+        if np.linalg.norm(device_centroid - wall_centroid) > 5.0:
+            continue
+        if str(getattr(device, "PredefinedType", "")) == "OVERHANG":
+            return 0.5
+        return 0.3
     return 1.0
 
 
@@ -255,20 +310,24 @@ def get_windows_on_wall(wall, model) -> list:
     return windows
 
 
-def get_window_area(window, settings) -> float:
-    """Get window area from OverallWidth × OverallHeight, fallback to geometry."""
+def get_window_area(window, settings, unit_scale: float = 1.0) -> float:
+    """
+    Window area from OverallWidth × OverallHeight (attribute values are in
+    project length units, so apply unit_scale to convert to metres).
+    Falls back to half the total surface area of the window solid.
+    """
     try:
         w = getattr(window, "OverallWidth", None)
         h = getattr(window, "OverallHeight", None)
         if w and h:
-            return float(w) * float(h)
+            return float(w) * unit_scale * float(h) * unit_scale
     except Exception:
         pass
-    return get_element_area(window, settings)
+    return get_element_area(window, settings) / 2.0
 
 
-def is_window_operable(window, model) -> bool:
-    """Check IfcWindowType.OperationType for operability."""
+def is_window_operable(window, model) -> Optional[bool]:
+    """Check IfcWindowType.OperationType for operability. None = unknown."""
     try:
         for rel in getattr(window, "IsTypedBy", []):
             wtype = rel.RelatingType
@@ -276,42 +335,12 @@ def is_window_operable(window, model) -> bool:
                 op = getattr(wtype, "OperationType", None)
                 if op and str(op).upper() in OPERABLE_TYPES:
                     return True
-        # Also check IfcWindowStyle (IFC2x3)
-        for rel in getattr(window, "IsDefinedBy", []):
-            if hasattr(rel, "RelatingPropertyDefinition"):
-                pass
     except Exception:
         pass
     return None  # unknown — caller uses 60% default
 
 
-# ── Bounding box helpers ─────────────────────────────────────────────────────
-
-def get_building_bounding_box(model, settings) -> tuple[float, float, float]:
-    """
-    Returns (depth_m, width_m, height_m) from bounding box of all IfcWall elements.
-    depth = longest horizontal dimension, width = shortest.
-    """
-    all_verts = []
-    for wall in model.by_type("IfcWall"):
-        try:
-            shape = ifcopenshell.geom.create_shape(settings, wall)
-            verts = np.array(shape.geometry.verts).reshape(-1, 3)
-            all_verts.append(verts)
-        except Exception:
-            continue
-
-    if not all_verts:
-        return 10.0, 8.0, 3.0  # sensible defaults
-
-    combined = np.vstack(all_verts)
-    x_range = float(combined[:, 0].max() - combined[:, 0].min())
-    y_range = float(combined[:, 1].max() - combined[:, 1].min())
-    z_range = float(combined[:, 2].max() - combined[:, 2].min())
-
-    horiz = sorted([x_range, y_range])
-    return horiz[1], horiz[0], z_range  # depth, width, height
-
+# ── Storey helpers ───────────────────────────────────────────────────────────
 
 def get_floor_count(model) -> int:
     """Count IfcBuildingStorey elements."""
@@ -319,7 +348,7 @@ def get_floor_count(model) -> int:
     return max(1, len(storeys))
 
 
-def get_floor_to_ceiling_height(model) -> float:
+def get_floor_to_ceiling_height(model, unit_scale: float = 1.0) -> float:
     """
     Estimate floor-to-ceiling height from IfcBuildingStorey elevations.
     Falls back to 3.0m.
@@ -330,7 +359,7 @@ def get_floor_to_ceiling_height(model) -> float:
     )
     if len(storeys) >= 2:
         elevs = [getattr(s, "Elevation", None) for s in storeys]
-        elevs = [e for e in elevs if e is not None]
+        elevs = [e * unit_scale for e in elevs if e is not None]
         if len(elevs) >= 2:
             diffs = [elevs[i + 1] - elevs[i] for i in range(len(elevs) - 1)]
             h = float(np.median(diffs))
@@ -355,43 +384,74 @@ def get_total_floor_area(model) -> float:
 
 
 def get_roof_feature(model, settings) -> Optional[RoofFeature]:
-    """Extract roof from IfcSlab (ROOF type) or IfcRoof."""
-    roof_elements = list(model.by_type("IfcRoof")) + [
-        s for s in model.by_type("IfcSlab")
-        if getattr(s, "PredefinedType", None) in ("ROOF", "BASESLAB")
-    ]
+    """
+    Extract the roof. Preference order:
+      1. IfcRoof (resolving aggregated child slabs for geometry)
+      2. IfcSlab with PredefinedType ROOF
+      3. The IfcSlab with the highest centroid (top slab)
+    BASESLAB (foundation) is never a roof.
+    """
+    roof_el = None
+    geometry_elements: list = []
 
-    if not roof_elements:
-        # Fallback: highest IfcSlab
-        slabs = model.by_type("IfcSlab")
+    roofs = list(model.by_type("IfcRoof"))
+    if roofs:
+        roof_el = roofs[0]
+        # An IfcRoof is often an empty aggregate — geometry lives in child slabs
+        children = []
+        for rel in getattr(roof_el, "IsDecomposedBy", []) or []:
+            children.extend(rel.RelatedObjects)
+        geometry_elements = children if children else [roof_el]
+    else:
+        slabs = [
+            s for s in model.by_type("IfcSlab")
+            if str(getattr(s, "PredefinedType", "")) == "ROOF"
+        ]
         if slabs:
-            roof_elements = [slabs[-1]]
+            roof_el = slabs[0]
+            geometry_elements = [roof_el]
+        else:
+            # Highest slab by centroid Z (excluding foundations)
+            candidates = []
+            for s in model.by_type("IfcSlab"):
+                if str(getattr(s, "PredefinedType", "")) == "BASESLAB":
+                    continue
+                tri = get_element_triangles(s, settings)
+                if tri is None:
+                    continue
+                _, areas, centroids = tri
+                z = float(np.average(centroids[:, 2], weights=areas))
+                candidates.append((z, s))
+            if candidates:
+                candidates.sort(key=lambda t: t[0])
+                roof_el = candidates[-1][1]
+                geometry_elements = [roof_el]
 
-    if not roof_elements:
+    if roof_el is None:
         return None
 
-    roof_el = roof_elements[0]
-    area = get_element_area(roof_el, settings)
-
-    # Estimate inclination from geometry
-    inclination = 0.0
-    try:
-        shape = ifcopenshell.geom.create_shape(settings, roof_el)
-        verts = np.array(shape.geometry.verts).reshape(-1, 3)
-        faces = np.array(shape.geometry.faces).reshape(-1, 3)
-        z_range = float(verts[:, 2].max() - verts[:, 2].min())
+    # Projected footprint area + inclination from combined geometry
+    area = 0.0
+    z_range, xy_range = 0.0, 0.0
+    all_verts = []
+    for el in geometry_elements:
+        area += get_projected_area(el, settings)
+        tri = get_element_triangles(el, settings)
+        if tri is not None:
+            all_verts.append(tri[2])
+    if all_verts:
+        combined = np.vstack(all_verts)
+        z_range  = float(combined[:, 2].max() - combined[:, 2].min())
         xy_range = float(np.sqrt(
-            (verts[:, 0].max() - verts[:, 0].min()) ** 2 +
-            (verts[:, 1].max() - verts[:, 1].min()) ** 2
+            (combined[:, 0].max() - combined[:, 0].min()) ** 2 +
+            (combined[:, 1].max() - combined[:, 1].min()) ** 2
         ))
-        if xy_range > 0:
-            inclination = float(np.degrees(np.arctan2(z_range, xy_range)))
-    except Exception:
-        pass
+
+    inclination = float(np.degrees(np.arctan2(z_range, xy_range))) if xy_range > 0 else 0.0
 
     return RoofFeature(
         element_id=roof_el.GlobalId,
-        area_m2=area,
+        area_m2=round(area, 2),
         is_exposed=True,
         inclination_deg=round(inclination, 1),
         u_value=get_u_value(roof_el),
@@ -433,9 +493,10 @@ def parse_ifc(
     settings = ifcopenshell.geom.settings()
     settings.set(settings.USE_WORLD_COORDS, True)
 
-    # ── Facades ──────────────────────────────────────────────────────────────
-    facades: list[FacadeFeature] = []
-    total_operable_area = 0.0
+    try:
+        unit_scale = float(ifcopenshell.util.unit.calculate_unit_scale(model))
+    except Exception:
+        unit_scale = 1.0
 
     # Collect all wall types (IfcWallElementedCase is IFC4-only, skip if not in schema)
     _all_walls: list = []
@@ -444,6 +505,8 @@ def parse_ifc(
             _all_walls += list(model.by_type(wtype))
         except Exception:
             pass
+    # by_type("IfcWall") already includes subtypes in some schema versions — dedupe
+    _all_walls = list({w.id(): w for w in _all_walls}.values())
 
     exterior_walls = [w for w in _all_walls if is_exterior_wall(w)]
 
@@ -451,31 +514,68 @@ def parse_ifc(
     if not exterior_walls:
         exterior_walls = _all_walls
 
+    # ── First pass: triangulate every exterior wall once ─────────────────────
+    wall_geometry: dict[int, tuple] = {}   # wall.id() → (normals, areas, centroids)
+    all_centroids = []
+    all_weights = []
     for wall in exterior_walls:
-        normal = get_wall_outward_normal(wall, settings)
-        if normal is None:
+        tri = get_element_triangles(wall, settings)
+        if tri is None:
             continue
+        wall_geometry[wall.id()] = tri
+        _, areas, centroids = tri
+        all_centroids.append(centroids)
+        all_weights.append(areas)
 
-        bearing = normal_to_compass_bearing(normal)
-        label = degrees_to_label(bearing)
-        gross_area = get_element_area(wall, settings)
+    if all_centroids:
+        stacked = np.vstack(all_centroids)
+        weights = np.concatenate(all_weights)
+        building_centroid = np.average(stacked, axis=0, weights=weights)
+        x_range = float(stacked[:, 0].max() - stacked[:, 0].min())
+        y_range = float(stacked[:, 1].max() - stacked[:, 1].min())
+        horiz = sorted([x_range, y_range])
+        depth, width = max(horiz[1], 1.0), max(horiz[0], 1.0)
+    else:
+        building_centroid = np.zeros(3)
+        depth, width = 10.0, 8.0   # sensible defaults
 
-        # Some IFC files use mm — area would be in mm², divide to get m²
-        # A typical storey wall is 6–60 m²; if raw area > 10000 assume mm²
-        if gross_area > 10_000:
-            gross_area /= 1_000_000.0  # mm² → m²
+    # ── Second pass: build facade features ───────────────────────────────────
+    facades: list[FacadeFeature] = []
+    total_operable_area = 0.0
+
+    for wall in exterior_walls:
+        tri = wall_geometry.get(wall.id())
+        if tri is None:
+            continue
+        face = get_dominant_face(*tri)
+        if face is None:
+            continue
+        normal, face_area, face_centroid = face
+
+        # Orient outward: the outward face normal points away from the
+        # building centroid in plan.
+        offset_xy = face_centroid[:2] - building_centroid[:2]
+        if np.linalg.norm(offset_xy) > 1e-6 and float(np.dot(normal[:2], offset_xy)) < 0:
+            normal = -normal
+
+        if np.linalg.norm(normal[:2]) < 1e-6:
+            continue   # horizontal face won — not a usable facade
+
+        bearing    = normal_to_compass_bearing(normal)
+        label      = degrees_to_label(bearing)
+        gross_area = face_area
         if gross_area < 0.1:
             continue
 
-        windows = get_windows_on_wall(wall, model)
-        window_ids = [w.GlobalId for w in windows]
-        window_area = sum(get_window_area(w, settings) for w in windows)
-        wwr = min(1.0, window_area / gross_area) if gross_area > 0 else 0.0
+        windows     = get_windows_on_wall(wall, model)
+        window_ids  = [w.GlobalId for w in windows]
+        window_area = sum(get_window_area(w, settings, unit_scale) for w in windows)
+        wwr         = min(1.0, window_area / gross_area) if gross_area > 0 else 0.0
 
         # Operable window area
         for w in windows:
             operable = is_window_operable(w, model)
-            area = get_window_area(w, settings)
+            area = get_window_area(w, settings, unit_scale)
             if operable is True:
                 total_operable_area += area
             elif operable is None:
@@ -491,14 +591,13 @@ def parse_ifc(
             window_element_ids=window_ids,
             u_value=get_u_value(wall),
             construction_mass=get_construction_mass(wall, model),
-            shading_factor=get_shading_factor(wall, model),
+            shading_factor=get_shading_factor(wall, model, settings, face_centroid),
             is_exterior=True,
         ))
 
     # ── Building dimensions ───────────────────────────────────────────────────
-    depth, width, _ = get_building_bounding_box(model, settings)
-    n_floors = get_floor_count(model)
-    h_floor = get_floor_to_ceiling_height(model)
+    n_floors   = get_floor_count(model)
+    h_floor    = get_floor_to_ceiling_height(model, unit_scale)
     floor_area = get_total_floor_area(model)
 
     # Fallback floor area from bounding box × floors
@@ -507,15 +606,15 @@ def parse_ifc(
 
     # ── Roof ──────────────────────────────────────────────────────────────────
     roof = get_roof_feature(model, settings)
-    if roof is None:
+    if roof is None or roof.area_m2 < 1.0:
         # Synthetic roof from bounding box
         roof = RoofFeature(
-            element_id="SYNTHETIC_ROOF",
+            element_id=roof.element_id if roof else "SYNTHETIC_ROOF",
             area_m2=round(depth * width, 2),
             is_exposed=True,
-            inclination_deg=0.0,
-            u_value=None,
-            construction_mass="medium",
+            inclination_deg=roof.inclination_deg if roof else 0.0,
+            u_value=roof.u_value if roof else None,
+            construction_mass=roof.construction_mass if roof else "medium",
         )
 
     # ── Fallback: synthesise 4 cardinal facades from bounding box ────────────────

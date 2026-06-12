@@ -14,7 +14,7 @@ import pvlib
 
 from src.context_enricher import SiteContext
 from src.ifc_parser import BuildingFeatures, FacadeFeature
-from src.utils import linear_ramp
+from src.utils import linear_ramp, resolve_path
 
 # ── Orientation weights at Barcelona lat 41°N ─────────────────────────────────
 # Peak afternoon solar 14:00–18:00 July; SW and W prioritised.
@@ -76,7 +76,7 @@ def get_facade_summer_ghi(
 
     Source: Perez R. et al. 1990, Solar Energy 44(5):271–289.
     """
-    df, _ = pvlib.iotools.read_epw(epw_path, coerce_year=2001)
+    df, _ = pvlib.iotools.read_epw(str(resolve_path(epw_path)), coerce_year=2001)
     df.index = pd.date_range(
         start="2001-01-01 00:00",
         periods=8760,
@@ -133,12 +133,15 @@ def compute_shgi(
     epw_path: str = EPW_PATH,
 ) -> float:
     """
-    SHGI_i = GHI_facade × WWR × SHGC × (1 - shading_factor) × orientation_weight
+    SHGI_i = GHI_facade × WWR × SHGC × shading_factor × orientation_weight
+
+    shading_factor is the solar transmission of the facade's shading state
+    (1.0 = unshaded → full gain, 0.3 = heavily shaded → 30% of gain).
     Returns raw (unnormalised) value.
     """
     ghi = get_cached_facade_ghi(facade.orientation_label, site_lat, site_lon, epw_path)
     ow = ORIENTATION_WEIGHTS[facade.orientation_label]
-    return ghi * facade.wwr * shgc * (1.0 - facade.shading_factor) * ow
+    return ghi * facade.wwr * shgc * facade.shading_factor * ow
 
 
 # ── Ventilation cooling index ─────────────────────────────────────────────────
@@ -277,12 +280,24 @@ def diagnose(
             is_critical=False,
         ))
 
-    # Mark top-2 facades as critical
+    # Mark up to 2 facades as critical — only if they carry real thermal stress.
+    # (Previously the top-2 were always flagged, producing "critical facades"
+    # in buildings with zero overheating risk.)
+    CRITICAL_STRESS_MIN = 0.05
     sorted_by_stress = sorted(facade_stresses, key=lambda f: f.net_thermal_stress, reverse=True)
     for fs in sorted_by_stress[:2]:
-        fs.is_critical = True
+        if fs.net_thermal_stress > CRITICAL_STRESS_MIN:
+            fs.is_critical = True
 
-    proxy_odh = round(sum(f.net_thermal_stress for f in facade_stresses), 3)
+    # Area-weighted mean stress (0–1). A plain sum would scale with the number
+    # of wall segments in the model, making risk depend on modelling style.
+    facade_areas = [f.gross_area_m2 for f in building.facades]
+    total_facade_area = sum(facade_areas) or 1.0
+    proxy_odh = round(
+        sum(fs.net_thermal_stress * a for fs, a in zip(facade_stresses, facade_areas))
+        / total_facade_area,
+        3,
+    )
     risk_level = classify_risk(proxy_odh)
     critical_ids = [f.element_id for f in facade_stresses if f.is_critical]
 

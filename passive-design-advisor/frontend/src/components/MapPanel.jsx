@@ -101,17 +101,23 @@ function updateFootprint(map, building, lat, lon, rotDeg, footprintRef) {
   footprintRef.current?.remove()
   if (!building) return
 
-  const d   = (building.building_depth_m || 14) * 0.000009
-  const w   = (building.building_width_m || 9)  * 0.000009
-  const rad = ((rotDeg || 0) * Math.PI) / 180
+  // Footprint in metres: width along east, depth along north at 0° rotation.
+  const d   = building.building_depth_m || 14
+  const w   = building.building_width_m || 9
+  const rad = ((rotDeg || 0) * Math.PI) / 180   // compass: clockwise from north
   const cos = Math.cos(rad)
   const sin = Math.sin(rad)
 
-  const corners  = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]]
-  const latlngs  = corners.map(([x, y]) => [
-    lat + x * cos - y * sin,
-    lon + x * sin + y * cos,
-  ])
+  const mPerDegLat = 111320
+  const mPerDegLon = 111320 * Math.cos((lat * Math.PI) / 180)
+
+  const corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]]
+  const latlngs = corners.map(([x, y]) => {
+    // Clockwise rotation of local (x=east, y=north) by rotDeg
+    const east  =  x * cos + y * sin
+    const north = -x * sin + y * cos
+    return [lat + north / mPerDegLat, lon + east / mPerDegLon]
+  })
 
   footprintRef.current = L.polygon(latlngs, {
     color: '#7c6af7', fillColor: '#7c6af7', fillOpacity: 0.22, weight: 2,
@@ -126,7 +132,7 @@ function updateCompass(map, building, lat, lon, compassRef) {
   // Place N/S/E/W labels at fixed geographic cardinal offsets from the site centre.
   // The building footprint rotates relative to them so the user can see which face is north.
   const off  = 0.00026   // ~29 m — well outside any typical building footprint
-  const offE = off * 1.32 // compensate for lon degrees being shorter at ~41 °N
+  const offE = off / Math.cos((lat * Math.PI) / 180) // lon degrees are shorter at ~41 °N
 
   const dirs = [
     { label: 'N', dlat:  off,  dlon: 0    },

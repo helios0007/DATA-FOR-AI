@@ -7,16 +7,15 @@ can ask questions grounded in their specific building analysis.
 
 import json
 
-import anthropic
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.models import ChatRequest
 from app.session import session_store
+from src import llm_client
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-MODEL_ID = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 1024
 
 
@@ -76,15 +75,11 @@ async def chat_stream(req: ChatRequest):
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
     def generate():
-        client = anthropic.Anthropic()
-        with client.messages.stream(
-            model=MODEL_ID,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
+        try:
+            for text in llm_client.stream_text(system_prompt, messages, MAX_TOKENS):
                 yield _event(text)
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
         yield _done_event()
 
     return StreamingResponse(

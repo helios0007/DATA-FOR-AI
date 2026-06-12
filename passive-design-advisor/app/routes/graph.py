@@ -1,16 +1,16 @@
 import json
-import os
-from pathlib import Path
 
-import anthropic
 from fastapi import APIRouter, HTTPException
+
+from src import llm_client
+from src.utils import resolve_path
 
 router = APIRouter(prefix="/api", tags=["graph"])
 
 
 @router.get("/graph")
-async def get_knowledge_graph():
-    path = Path("graph/strategy_graph.json")
+def get_knowledge_graph():
+    path = resolve_path("graph/strategy_graph.json")
     if not path.exists():
         raise HTTPException(
             status_code=404,
@@ -21,18 +21,15 @@ async def get_knowledge_graph():
 
 
 @router.get("/test-llm")
-async def test_llm():
-    """Quick check: is the API key valid and can we reach Claude?"""
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        return {"status": "error", "detail": "ANTHROPIC_API_KEY not set in environment"}
+def test_llm():
+    """Quick check: which LLM provider is active and is it reachable?"""
+    provider = llm_client.describe_provider()
     try:
-        client = anthropic.Anthropic(api_key=key)
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        text = llm_client.complete(
+            "You are a health check. Reply with one word.",
+            [{"role": "user", "content": "Say OK"}],
             max_tokens=10,
-            messages=[{"role": "user", "content": "hi"}],
         )
-        return {"status": "ok", "key_prefix": key[:18] + "...", "response": resp.content[0].text}
+        return {"status": "ok", "provider": provider, "response": text}
     except Exception as e:
-        return {"status": "error", "key_prefix": key[:18] + "...", "detail": str(e)}
+        return {"status": "error", "provider": provider, "detail": str(e)}

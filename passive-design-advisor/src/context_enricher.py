@@ -6,12 +6,13 @@ All spatial operations use EPSG:25831 (UTM zone 31N).
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import geopandas as gpd
 import numpy as np
 from shapely.geometry import Point
 
-from src.utils import latlon_to_utm31n, load_epw_summary
+from src.utils import latlon_to_utm31n, load_epw_summary, resolve_path
 
 # ── Dataset paths ────────────────────────────────────────────────────────────
 BUILDINGS_GPKG  = "data/Base - Alçades.gpkg"
@@ -68,12 +69,15 @@ class SiteContext:
 
 # ── Building data loading ─────────────────────────────────────────────────────
 
+@lru_cache(maxsize=2)
 def load_buildings(gpkg_path: str = BUILDINGS_GPKG) -> gpd.GeoDataFrame:
     """
     Load ICGC building footprints with heights.
     Filters to primary level and computes height_m = Z_MAX_VOL - Z_MIN_VOL.
+    Cached: the GPKG is ~180 MB, so re-reading it per request dominated
+    enrichment time (~5 s/call). Callers must not mutate the returned frame.
     """
-    gdf = gpd.read_file(gpkg_path, layer=BUILDINGS_LAYER)
+    gdf = gpd.read_file(resolve_path(gpkg_path), layer=BUILDINGS_LAYER)
     gdf = gdf[gdf["NIVELL"] == PRIMARY_NIVELL].copy()
     gdf["height_m"] = gdf["Z_MAX_VOL"] - gdf["Z_MIN_VOL"]
     gdf = gdf[gdf["height_m"] > 1.0].copy()
@@ -242,6 +246,12 @@ def estimate_green_cover(
 
 # ── Thermal comfort zone ──────────────────────────────────────────────────────
 
+@lru_cache(maxsize=2)
+def _load_comfort_zones(gpkg_path: str = COMFORT_GPKG) -> gpd.GeoDataFrame:
+    """Load and reproject the comfort-zone polygons once per process."""
+    return gpd.read_file(resolve_path(gpkg_path)).to_crs("EPSG:25831")
+
+
 def get_thermal_comfort_zone(
     site_point: Point,
     gpkg_path: str = COMFORT_GPKG,
@@ -253,8 +263,7 @@ def get_thermal_comfort_zone(
 
     Source: Ajuntament de Barcelona, Open Data BCN — confort-termic dataset.
     """
-    gdf = gpd.read_file(gpkg_path)
-    gdf = gdf.to_crs("EPSG:25831")
+    gdf = _load_comfort_zones(gpkg_path)
 
     matches = gdf[gdf.geometry.contains(site_point)]
     if len(matches) == 0:

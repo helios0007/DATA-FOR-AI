@@ -6,11 +6,22 @@ from pathlib import Path
 from pyproj import Transformer
 from shapely.geometry import Point
 
-EPW_SUMMARY_PATH = Path("outputs/epw_summary.json")
+# Resolve data files relative to the project root so the server / CLI can be
+# started from any working directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def load_epw_summary(path: Path = EPW_SUMMARY_PATH) -> dict:
-    with open(path, encoding="utf-8") as f:
+def resolve_path(path: str | Path) -> Path:
+    """Return an absolute path; relative paths are anchored at the project root."""
+    p = Path(path)
+    return p if p.is_absolute() else PROJECT_ROOT / p
+
+
+EPW_SUMMARY_PATH = resolve_path("outputs/epw_summary.json")
+
+
+def load_epw_summary(path: str | Path = EPW_SUMMARY_PATH) -> dict:
+    with open(resolve_path(path), encoding="utf-8") as f:
         return json.load(f)
 
 

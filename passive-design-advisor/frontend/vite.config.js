@@ -6,4 +6,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['web-ifc'],
   },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8000',
+    },
+  },
 })

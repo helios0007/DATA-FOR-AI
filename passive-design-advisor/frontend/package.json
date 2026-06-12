@@ -10,12 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "web-ifc": "0.0.77",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "three": "^0.184.0"
+    "react-markdown": "^10.1.0",
+    "three": "^0.184.0",
+    "web-ifc": "0.0.77"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

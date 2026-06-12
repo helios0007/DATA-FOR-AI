@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-
-const API = 'http://localhost:8000'
+import ReactMarkdown from 'react-markdown'
 
 /**
  * ChatPanel — Streaming chat with Claude, grounded in the analysis report.
@@ -47,8 +46,15 @@ export default function ChatPanel({ sessionId, analysisResult }) {
     // Add empty assistant bubble to stream into
     setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
+    const setLastMessage = updater =>
+      setMessages(prev => {
+        const updated = [...prev]
+        updated[updated.length - 1] = updater(updated[updated.length - 1])
+        return updated
+      })
+
     try {
-      const res = await fetch(`${API}/api/chat/stream`, {
+      const res = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -57,6 +63,11 @@ export default function ChatPanel({ sessionId, analysisResult }) {
           report_context: buildReportContext(),
         }),
       })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Chat request failed (HTTP ${res.status})`)
+      }
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -74,24 +85,19 @@ export default function ChatPanel({ sessionId, analysisResult }) {
           const data = line.slice(6)
           if (data === '[DONE]') break
           try {
-            const { text } = JSON.parse(data)
-            setMessages(prev => {
-              const updated = [...prev]
-              updated[updated.length - 1] = {
-                role: 'assistant',
-                content: updated[updated.length - 1].content + text,
-              }
-              return updated
-            })
-          } catch (_) {}
+            const evt = JSON.parse(data)
+            if (evt.error) throw new Error(evt.error)
+            if (evt.text) {
+              setLastMessage(m => ({ role: 'assistant', content: m.content + evt.text }))
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) continue   // partial JSON — skip
+            throw e
+          }
         }
       }
     } catch (e) {
-      setMessages(prev => {
-        const updated = [...prev]
-        updated[updated.length - 1] = { role: 'assistant', content: `Error: ${e.message}` }
-        return updated
-      })
+      setLastMessage(() => ({ role: 'assistant', content: `⚠ ${e.message}` }))
     }
     setLoading(false)
   }
@@ -106,20 +112,26 @@ export default function ChatPanel({ sessionId, analysisResult }) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {messages.map((m, i) => (
           <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-            <div style={{
-              maxWidth: '80%',
-              padding: '8px 12px',
-              borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-              background: m.role === 'user' ? 'var(--accent)' : 'var(--surface2)',
-              color: m.role === 'user' ? '#fff' : 'var(--text)',
-              fontSize: 13,
-              lineHeight: 1.6,
-              whiteSpace: 'pre-wrap',
-            }}>
-              {m.content || (loading && i === messages.length - 1
-                ? <span style={{ color: 'var(--text-dim)' }}>▌</span>
-                : ''
-              )}
+            <div
+              className={m.role === 'assistant' ? 'md-body' : undefined}
+              style={{
+                maxWidth: '80%',
+                padding: '8px 12px',
+                borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+                background: m.role === 'user' ? 'var(--accent)' : 'var(--surface2)',
+                color: m.role === 'user' ? '#fff' : 'var(--text)',
+                fontSize: 13,
+                lineHeight: 1.6,
+                whiteSpace: m.role === 'user' ? 'pre-wrap' : 'normal',
+              }}
+            >
+              {m.role === 'assistant'
+                ? (m.content
+                    ? <ReactMarkdown>{m.content}</ReactMarkdown>
+                    : (loading && i === messages.length - 1
+                        ? <span style={{ color: 'var(--text-dim)' }}>▌</span>
+                        : ''))
+                : m.content}
             </div>
           </div>
         ))}

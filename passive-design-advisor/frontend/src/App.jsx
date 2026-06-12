@@ -4,11 +4,13 @@ import MapPanel     from './components/MapPanel'
 import ResultsPanel from './components/ResultsPanel'
 import ChatPanel    from './components/ChatPanel'
 import GraphModal   from './components/GraphModal'
+import ReportModal  from './components/ReportModal'
 import './App.css'
 
-const API = 'http://localhost:8000'
+// API calls use relative paths: the Vite dev server proxies /api to the
+// backend (vite.config.js), and in production the backend serves the bundle.
 
-// ── Workflow steps ────────────────────────────────────────────────────────────
+// ── Workflow steps (derived from state) ──────────────────────────────────────
 // 0 = upload IFC
 // 1 = set site location on map
 // 2 = orient building (rotation)
@@ -16,7 +18,6 @@ const API = 'http://localhost:8000'
 // 4 = results ready
 
 export default function App() {
-  const [step, setStep]             = useState(0)
   const [sessionId, setSessionId]   = useState(null)
   const [building, setBuilding]     = useState(null)
   const [siteLat, setSiteLat]       = useState(41.3851)
@@ -26,14 +27,26 @@ export default function App() {
   const [rotationDeg, setRotation]  = useState(0)
   const [skipLlm, setSkipLlm]       = useState(false)
   const [result, setResult]         = useState(null)
-  const [loading, setLoading]       = useState(false)
+  const [phase, setPhase]           = useState('idle')  // 'idle' | 'upload' | 'analysis'
+  const [progress, setProgress]     = useState(null)    // SSE stage label during analysis
   const [error, setError]           = useState(null)
   const [rightTab, setRightTab]     = useState('results')
+  const [highlight, setHighlight]   = useState(null)   // { key, label, ids } — 3-D element highlight
   const [graphOpen, setGraphOpen]   = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportSnaps, setReportSnaps] = useState(null) // { overall, critical, byStrategy }
   const [splitPct, setSplitPct]     = useState(55)
   const fileRef   = useRef(null)
   const centerRef = useRef(null)
   const dragRef   = useRef(false)
+  const viewerRef = useRef(null)
+
+  const loading = phase !== 'idle'
+  const step =
+    !building ? 0 :
+    !siteSet  ? 1 :
+    result    ? 4 :
+    phase === 'analysis' ? 3 : 2
 
   // Drag-to-resize between IFC viewer and map
   useEffect(() => {
@@ -52,30 +65,78 @@ export default function App() {
     }
   }, [])
 
+  const applyParsedBuilding = data => {
+    setBuilding(data)
+    setSessionId(data.session_id)
+    setResult(null)
+    setHighlight(null)
+  }
+
+  // Toggle highlighting of strategy-affected elements in the 3-D viewer
+  const toggleHighlight = (key, label, ids) =>
+    setHighlight(h => (h?.key === key ? null : { key, label, ids }))
+
+  // Capture per-strategy 3-D snapshots and open the printable report
+  const generateReport = () => {
+    if (!result) return
+    const cap = ids => viewerRef.current?.capture?.(ids) ?? null
+    const byStrategy = {}
+    for (const s of result.strategies ?? []) {
+      if (s.precondition_met !== 'NO' && s.affected_elements?.length) {
+        byStrategy[s.name] = cap(s.affected_elements)
+      }
+    }
+    setReportSnaps({
+      overall: cap(null),
+      critical: result.diagnosis?.critical_facades?.length
+        ? cap(result.diagnosis.critical_facades)
+        : null,
+      byStrategy,
+    })
+    setReportOpen(true)
+  }
+
   // ── Step 0 → 1: Upload IFC ────────────────────────────────────────────────
   const handleUpload = async e => {
     const file = e.target.files?.[0]
     if (!file) return
     setError(null)
-    setLoading(true)
+    setPhase('upload')
     const fd = new FormData()
     fd.append('file', file)
     fd.append('site_lat', siteLat)
     fd.append('site_lon', siteLon)
     fd.append('building_use', buildingUse)
     try {
-      const res  = await fetch(`${API}/api/ifc/upload`, { method: 'POST', body: fd })
+      const res  = await fetch('/api/ifc/upload', { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Upload failed')
-      setBuilding(data)
-      setSessionId(data.session_id)
-      setStep(1)
+      applyParsedBuilding(data)
     } catch (e) {
       setError(e.message)
     }
-    setLoading(false)
+    setPhase('idle')
     // reset input so the same file can be re-uploaded
     e.target.value = ''
+  }
+
+  // Load the bundled Duplex sample — lets users try the tool with no IFC file
+  const loadSample = async () => {
+    setError(null)
+    setPhase('upload')
+    const fd = new FormData()
+    fd.append('site_lat', siteLat)
+    fd.append('site_lon', siteLon)
+    fd.append('building_use', buildingUse)
+    try {
+      const res  = await fetch('/api/ifc/sample', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'Sample load failed')
+      applyParsedBuilding(data)
+    } catch (e) {
+      setError(e.message)
+    }
+    setPhase('idle')
   }
 
   // Site picked on map
@@ -85,12 +146,13 @@ export default function App() {
     setSiteSet(true)
   }
 
-  // ── Step 3 → 4: run analysis ──────────────────────────────────────────────
+  // ── Step 3 → 4: run analysis (SSE — per-stage progress) ───────────────────
   const runAnalysis = async () => {
     setError(null)
-    setLoading(true)
+    setPhase('analysis')
+    setProgress('Starting analysis…')
     try {
-      const res  = await fetch(`${API}/api/analysis/run`, {
+      const res = await fetch('/api/analysis/run-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -102,15 +164,41 @@ export default function App() {
           skip_llm:            skipLlm,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Analysis failed')
-      setResult(data)
-      setStep(4)
-      setRightTab('results')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `Analysis failed (HTTP ${res.status})`)
+      }
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let finished = false
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const events = buf.split('\n\n')
+        buf = events.pop()
+        for (const block of events) {
+          const line = block.split('\n').find(l => l.startsWith('data: '))
+          if (!line) continue
+          const evt = JSON.parse(line.slice(6))
+          if (evt.stage === 'error') throw new Error(evt.detail)
+          if (evt.stage === 'done') {
+            setResult(evt.result)
+            setRightTab('results')
+            setHighlight(null)
+            finished = true
+          } else {
+            setProgress(evt.label)
+          }
+        }
+      }
+      if (!finished) throw new Error('Analysis stream ended unexpectedly')
     } catch (e) {
       setError(e.message)
     }
-    setLoading(false)
+    setPhase('idle')
+    setProgress(null)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -148,12 +236,22 @@ export default function App() {
               onClick={() => fileRef.current?.click()}
               disabled={loading}
             >
-              {loading && step === 0 ? 'Parsing…' : building ? '↑ Re-upload IFC' : '↑ Upload IFC'}
+              {phase === 'upload' ? 'Parsing…' : building ? '↑ Re-upload IFC' : '↑ Upload IFC'}
             </button>
             <input
               ref={fileRef} type="file" accept=".ifc" style={{ display: 'none' }}
               onChange={handleUpload}
             />
+            {!building && (
+              <button
+                className="btn-secondary"
+                style={{ width: '100%', fontSize: 11 }}
+                onClick={loadSample}
+                disabled={loading}
+              >
+                ✦ Try sample building (Duplex)
+              </button>
+            )}
 
             {building && (
               <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 2, marginTop: 4 }}>
@@ -173,7 +271,7 @@ export default function App() {
           </Section>
 
           {/* SITE section — visible once IFC uploaded */}
-          {step >= 1 && (
+          {building && (
             <Section label="Site Location">
               <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
                 Draw a rectangle on the map. The building will be placed at its centre.
@@ -191,7 +289,7 @@ export default function App() {
           )}
 
           {/* ORIENTATION section — visible as soon as IFC is uploaded */}
-          {step >= 1 && (
+          {building && (
             <Section label="Orientation">
               <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
                 Drag the 3-D viewer or use the slider to set the building orientation before running analysis.
@@ -217,19 +315,30 @@ export default function App() {
           )}
 
           {/* ANALYSIS section — visible once IFC is uploaded */}
-          {step >= 1 && (
+          {building && (
             <Section label="Analysis">
               <button
                 className="btn-primary" style={{ width: '100%' }}
                 onClick={runAnalysis}
-                disabled={loading || !sessionId}
+                disabled={loading || !sessionId || !siteSet}
               >
-                {loading && step >= 1 ? (
+                {phase === 'analysis' ? (
                   <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
                     <span className="spin-ring" style={{ width: 14, height: 14 }} /> Running…
                   </span>
                 ) : '▶ Run Analysis'}
               </button>
+              {!siteSet && (
+                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+                  Set the site location on the map first.
+                </div>
+              )}
+
+              {phase === 'analysis' && progress && (
+                <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 6, lineHeight: 1.5 }}>
+                  {progress}
+                </div>
+              )}
 
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, cursor: 'pointer', fontWeight: 400, fontSize: 12 }}>
                 <input type="checkbox" checked={skipLlm} onChange={e => setSkipLlm(e.target.checked)}
@@ -259,31 +368,40 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ── Centre: IFC viewer + map ── */}
+        {/* ── Centre: IFC viewer + map ──
+            Before a building is loaded the 3-D viewer is empty, so the map
+            gets the full centre area; the viewer + split appear after upload. */}
         <div ref={centerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-          {/* IFC Viewer */}
-          <div style={{ flex: `0 0 ${splitPct}%`, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
-            <IFCViewer
-              sessionId={sessionId}
-              rotationDeg={rotationDeg}
-            />
-          </div>
+          {building && (
+            <>
+              {/* IFC Viewer */}
+              <div style={{ flex: `0 0 ${splitPct}%`, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+                <IFCViewer
+                  ref={viewerRef}
+                  sessionId={sessionId}
+                  rotationDeg={rotationDeg}
+                  highlightIds={highlight?.ids}
+                  highlightLabel={highlight?.label}
+                />
+              </div>
 
-          {/* Drag handle */}
-          <div
-            onMouseDown={e => { dragRef.current = true; e.preventDefault() }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--border)'}
-            style={{
-              height: 6, flexShrink: 0, cursor: 'row-resize',
-              background: 'var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 0.15s',
-            }}
-          >
-            <div style={{ width: 28, height: 2, borderRadius: 1, background: 'var(--text-dim)', opacity: 0.45, pointerEvents: 'none' }} />
-          </div>
+              {/* Drag handle */}
+              <div
+                onMouseDown={e => { dragRef.current = true; e.preventDefault() }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'var(--border)'}
+                style={{
+                  height: 6, flexShrink: 0, cursor: 'row-resize',
+                  background: 'var(--border)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.15s',
+                }}
+              >
+                <div style={{ width: 28, height: 2, borderRadius: 1, background: 'var(--text-dim)', opacity: 0.45, pointerEvents: 'none' }} />
+              </div>
+            </>
+          )}
 
           {/* Map */}
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
@@ -294,13 +412,15 @@ export default function App() {
               building={building}
               rotationDeg={rotationDeg}
             />
-            {step < 1 && (
+            {!building && (
               <div style={{
-                position: 'absolute', inset: 0, background: 'rgba(15,15,19,.7)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                pointerEvents: 'none', fontSize: 12, color: 'var(--text-dim)',
+                position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(15,15,19,.88)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '8px 16px', zIndex: 500,
+                pointerEvents: 'none', fontSize: 12, color: 'var(--text)',
+                boxShadow: '0 2px 12px rgba(0,0,0,.4)',
               }}>
-                Upload an IFC file to activate the site map
+                Upload an IFC file (or try the sample) — you can already pick the site location on the map
               </div>
             )}
           </div>
@@ -332,6 +452,9 @@ export default function App() {
                 diagnosis={result?.diagnosis}
                 strategies={result?.strategies}
                 site={result?.site}
+                highlightKey={highlight?.key}
+                onToggleHighlight={toggleHighlight}
+                onGenerateReport={generateReport}
               />
             </div>
           ) : (
@@ -343,6 +466,16 @@ export default function App() {
 
       </div>
     <GraphModal open={graphOpen} onClose={() => setGraphOpen(false)} />
+    <ReportModal
+      open={reportOpen}
+      onClose={() => setReportOpen(false)}
+      result={result}
+      building={building}
+      snapshots={reportSnaps}
+      siteLat={siteLat}
+      siteLon={siteLon}
+      buildingUse={buildingUse}
+    />
     </div>
   )
 }

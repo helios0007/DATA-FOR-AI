@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 graph/chroma_db/
 outputs/reports/
+
+uploads/
+node_modules/
+frontend/dist/

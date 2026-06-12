@@ -11,9 +11,9 @@ load_dotenv(override=True)   # always use .env value, even if var is set in syst
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
 from app.routes import ifc, analysis, chat, graph
+from src.utils import resolve_path
 
 app = FastAPI(
     title="Passive Design Advisor API",
@@ -21,10 +21,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Allow requests from the Vite dev server and same origin
+# Allow requests from the Vite dev server; same-origin needs no CORS.
+# (The dev frontend proxies /api through Vite, so this mostly matters for
+# anyone hitting the API from the Vite origin directly.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # dev only — restrict in production
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,6 +50,6 @@ def health():
 
 
 # Serve built frontend from frontend/dist/ in production
-dist = Path("frontend/dist")
+dist = resolve_path("frontend/dist")
 if dist.exists():
     app.mount("/", StaticFiles(directory=str(dist), html=True), name="static")

@@ -330,9 +330,10 @@ def score_night_purge(
     """
     Source: Santamouris 1996 §9.3; CIBSE TM52:2013 §4.2; Balaras 1996.
 
-    IMPORTANT: Barcelona EPW gives only ~104 summer night hours below 22°C.
-    This strategy correctly scores LOW to MEDIUM for most Barcelona sites.
-    Do not adjust thresholds to inflate this score.
+    NOTE: the Barcelona TMYx EPW summary reports 469 summer night hours below
+    22°C (outputs/epw_summary.json), comfortably above the 150 h "YES"
+    threshold — operable-window ratio and thermal mass are then the score
+    drivers. Do not adjust thresholds to inflate or deflate this score.
     """
     hours = context.night_purge_hours_below_22C
     op_ratio = (

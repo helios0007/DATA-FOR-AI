@@ -5,26 +5,26 @@ Anthropic API to generate geometric recommendations per strategy.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
-import anthropic
-import chromadb
 import networkx as nx
 from networkx.readwrite import json_graph
-from sentence_transformers import SentenceTransformer
 
+from src import llm_client
 from src.context_enricher import SiteContext
 from src.ifc_parser import BuildingFeatures
 from src.strategy_scorer import StrategyScore
 from src.thermal_diagnosis import ThermalDiagnosis
+from src.utils import resolve_path
 
 GRAPH_PATH  = "graph/strategy_graph.json"
 CHROMA_PATH = "graph/chroma_db"
 COLLECTION  = "passive_design_knowledge"
 EMBED_MODEL = "all-MiniLM-L6-v2"
-MODEL_ID    = "claude-haiku-4-5-20251001"
 MAX_TOKENS  = 1000
 N_RESULTS   = 5
 
@@ -43,10 +43,38 @@ class FinalReport:
 
 # ── Graph loading ─────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=2)
 def load_graph(path: str = GRAPH_PATH) -> nx.DiGraph:
-    with open(path, encoding="utf-8") as f:
+    with open(resolve_path(path), encoding="utf-8") as f:
         data = json.load(f)
     return json_graph.node_link_graph(data, directed=True)
+
+
+@lru_cache(maxsize=1)
+def load_embed_model(name: str = EMBED_MODEL):
+    """
+    Loading the sentence-transformer takes several seconds — do it once.
+    Returns None when sentence-transformers isn't installed (RAG optional).
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        return None
+    return SentenceTransformer(name)
+
+
+@lru_cache(maxsize=1)
+def load_chroma_collection(path: str = CHROMA_PATH, name: str = COLLECTION):
+    """
+    Returns the ChromaDB collection, or None if chromadb isn't installed
+    or the store hasn't been built — recommendations then run without RAG.
+    """
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(resolve_path(path)))
+        return client.get_collection(name)
+    except Exception:
+        return None
 
 
 # ── GraphRAG retrieval ────────────────────────────────────────────────────────
@@ -55,7 +83,7 @@ def retrieve_for_strategy(
     strategy_name: str,
     graph: nx.DiGraph,
     collection,
-    embed_model: SentenceTransformer,
+    embed_model,
     n_results: int = N_RESULTS,
 ) -> str:
     """
@@ -217,17 +245,14 @@ def generate_recommendation(
     retrieved_context: str,
     all_scores: list[StrategyScore],
 ) -> str:
-    client = anthropic.Anthropic()
     prompt = build_recommendation_prompt(
         score, building, context, diagnosis, retrieved_context, all_scores
     )
-    response = client.messages.create(
-        model=MODEL_ID,
+    return llm_client.complete(
+        SYSTEM_PROMPT,
+        [{"role": "user", "content": prompt}],
         max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text
 
 
 # ── Report assembly ───────────────────────────────────────────────────────────
@@ -243,19 +268,12 @@ def generate_report(
     Load graph + RAG, generate LLM recommendations for all viable strategies,
     and assemble the final report dataclass.
     """
-    # Load knowledge base
+    # Knowledge base (cached at module level — loaded once per process)
     graph = load_graph()
-    embed_model = SentenceTransformer(EMBED_MODEL)
+    embed_model = load_embed_model()
+    collection = load_chroma_collection()
 
-    chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-    try:
-        collection = chroma_client.get_collection(COLLECTION)
-    except Exception:
-        collection = None  # RAG unavailable — will return empty context
-
-    strategies_output: list[dict] = []
-
-    for rank, score in enumerate(ranked_scores, start=1):
+    def build_strategy_entry(rank: int, score: StrategyScore) -> dict:
         # Retrieve context from graph + vector store
         if collection is not None:
             retrieved = retrieve_for_strategy(score.strategy_name, graph, collection, embed_model)
@@ -275,7 +293,7 @@ def generate_report(
         else:
             rec_text = "(LLM recommendations skipped — run without --skip-llm once API key is active)"
 
-        strategies_output.append({
+        return {
             "rank": rank,
             "name": score.strategy_name,
             "precondition_met": score.precondition_met,
@@ -286,7 +304,17 @@ def generate_report(
             "key_driver": score.key_driver,
             "factor_scores": score.factor_scores,
             "recommendation": rec_text,
-        })
+        }
+
+    # The per-strategy LLM calls are independent — run them concurrently
+    # (sequentially this was ~5 × full LLM latency per report).
+    with ThreadPoolExecutor(max_workers=len(ranked_scores) or 1) as pool:
+        strategies_output = list(
+            pool.map(
+                lambda rs: build_strategy_entry(*rs),
+                enumerate(ranked_scores, start=1),
+            )
+        )
 
     ifc_name = Path(building.ifc_file_path).name
     dominant_mass = building.facades[0].construction_mass if building.facades else "medium"

@@ -1,8 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-
-const API = 'http://localhost:8000'
 
 // Module-level singleton so WASM initialises only once per page load
 let _ifcApi = null
@@ -23,13 +21,58 @@ async function getIfcApi() {
   return _initPromise
 }
 
+// ── Highlight material helpers ────────────────────────────────────────────────
+
+function clearHighlight(group) {
+  group.traverse(o => {
+    if (o.isMesh && o.userData.origMaterial) {
+      o.material.dispose()
+      o.material = o.userData.origMaterial
+      delete o.userData.origMaterial
+    }
+  })
+}
+
+// Highlights the meshes for the given GlobalIds, ghosting all others.
+// Returns the number of ids that matched geometry.
+function applyHighlight(group, idMap, ids) {
+  const targets = new Set()
+  let matched = 0
+  for (const gid of ids) {
+    const meshes = idMap.get(gid)
+    if (meshes?.length) matched++
+    for (const m of meshes ?? []) targets.add(m)
+  }
+  group.traverse(o => {
+    if (!o.isMesh) return
+    o.userData.origMaterial = o.material
+    o.material = targets.has(o)
+      ? new THREE.MeshLambertMaterial({
+          color: 0xffa733, emissive: 0x9a5a00, side: THREE.DoubleSide,
+        })
+      : new THREE.MeshLambertMaterial({
+          color: 0x3a3a46, transparent: true, opacity: 0.15,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+  })
+  return matched
+}
+
 /**
  * IFCViewer — renders an IFC file with web-ifc + Three.js.
  * Props:
- *   sessionId   – triggers model load when it changes
- *   rotationDeg – Y-axis rotation of the model group
+ *   sessionId      – triggers model load when it changes
+ *   rotationDeg    – Y-axis rotation of the model group
+ *   highlightIds   – IFC GlobalIds to highlight (others ghost out); null = off
+ *   highlightLabel – caption shown while a highlight is active
+ * Ref API:
+ *   capture(ids)   – returns a PNG data-URL of the current view with the given
+ *                    GlobalIds highlighted (empty/null ids = plain view)
  */
-export default function IFCViewer({ sessionId, rotationDeg }) {
+const IFCViewer = forwardRef(function IFCViewer(
+  { sessionId, rotationDeg, highlightIds, highlightLabel },
+  ref,
+) {
   const mountRef   = useRef(null)
   const rendRef    = useRef(null)
   const sceneRef   = useRef(null)
@@ -37,9 +80,32 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
   const ctrlRef    = useRef(null)
   const groupRef   = useRef(null)
   const rafRef     = useRef(null)
+  const idMapRef   = useRef(new Map())   // IFC GlobalId -> THREE.Mesh[]
+  const activeIdsRef = useRef(null)      // currently prop-driven highlight
 
   const [phase, setPhase]   = useState('idle')
   const [errMsg, setErrMsg] = useState('')
+  const [hitCount, setHitCount] = useState(0)
+
+  // Snapshot API for report generation: render with a temporary highlight,
+  // grab the canvas, then restore whatever highlight the UI had active.
+  useImperativeHandle(ref, () => ({
+    capture(ids) {
+      const group = groupRef.current
+      const renderer = rendRef.current
+      if (!group || !renderer) return null
+      clearHighlight(group)
+      if (ids?.length) applyHighlight(group, idMapRef.current, ids)
+      renderer.render(sceneRef.current, camRef.current)
+      const url = renderer.domElement.toDataURL('image/png')
+      clearHighlight(group)
+      if (activeIdsRef.current?.length) {
+        applyHighlight(group, idMapRef.current, activeIdsRef.current)
+      }
+      renderer.render(sceneRef.current, camRef.current)
+      return url
+    },
+  }))
 
   // ── Three.js scene init ────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,12 +192,13 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
         disposeGroup(groupRef.current)
         groupRef.current = null
       }
+      idMapRef.current = new Map()
 
       try {
         const api = await getIfcApi()
         if (cancelled) return
 
-        const res = await fetch(`${API}/api/ifc/file/${sessionId}`)
+        const res = await fetch(`/api/ifc/file/${sessionId}`)
         if (!res.ok) throw new Error(`HTTP ${res.status} — failed to fetch IFC`)
         const buffer = new Uint8Array(await res.arrayBuffer())
         if (cancelled) return
@@ -140,10 +207,12 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
 
         const group     = new THREE.Group()
         const allMeshes = api.LoadAllGeometry(modelId)
+        const byExpress = new Map()   // expressID -> THREE.Mesh[]
 
         for (let i = 0; i < allMeshes.size(); i++) {
-          const wMesh = allMeshes.get(i)
-          const geoms = wMesh.geometries
+          const wMesh     = allMeshes.get(i)
+          const geoms     = wMesh.geometries
+          const expressID = wMesh.expressID
 
           for (let j = 0; j < geoms.size(); j++) {
             const pg       = geoms.get(j)
@@ -173,15 +242,31 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
               opacity: a,
               side: THREE.DoubleSide,
             })
-            group.add(new THREE.Mesh(geo, mat))
+            const mesh = new THREE.Mesh(geo, mat)
+            group.add(mesh)
+            if (!byExpress.has(expressID)) byExpress.set(expressID, [])
+            byExpress.get(expressID).push(mesh)
             geomData.delete()
           }
         }
 
+        // Map IFC GlobalIds (used by the analysis API) to meshes, so
+        // strategy results can highlight their affected elements.
+        const idMap = new Map()
+        for (const [expressID, meshes] of byExpress) {
+          try {
+            const gid = api.GetLine(modelId, expressID)?.GlobalId?.value
+            if (gid) idMap.set(gid, meshes)
+          } catch { /* non-product line — skip */ }
+        }
+        idMapRef.current = idMap
+
         api.CloseModel(modelId)
         if (cancelled) { disposeGroup(group); return }
 
-        group.rotation.y = THREE.MathUtils.degToRad(rotationDeg || 0)
+        // Compass rotation is clockwise from above; Three.js +Y rotation is
+        // counterclockwise from above, so negate.
+        group.rotation.y = -THREE.MathUtils.degToRad(rotationDeg || 0)
         sceneRef.current.add(group)
         groupRef.current = group
 
@@ -207,8 +292,19 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
   // ── Rotation ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (groupRef.current)
-      groupRef.current.rotation.y = THREE.MathUtils.degToRad(rotationDeg || 0)
+      groupRef.current.rotation.y = -THREE.MathUtils.degToRad(rotationDeg || 0)
   }, [rotationDeg])
+
+  // ── Element highlighting (strategy "show on model") ───────────────────────
+  useEffect(() => {
+    activeIdsRef.current = highlightIds
+    const group = groupRef.current
+    if (!group || phase !== 'ready') return
+
+    clearHighlight(group)
+    if (!highlightIds?.length) { setHitCount(0); return }
+    setHitCount(applyHighlight(group, idMapRef.current, highlightIds))
+  }, [highlightIds, phase])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -241,9 +337,26 @@ export default function IFCViewer({ sessionId, rotationDeg }) {
           Orbit: left-drag · Zoom: scroll · Pan: right-drag
         </div>
       )}
+      {phase === 'ready' && highlightIds?.length > 0 && (
+        <div style={{
+          position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
+          pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 8,
+          background: 'rgba(0,0,0,.65)', border: '1px solid rgba(255,167,51,.6)',
+          borderRadius: 6, padding: '5px 12px', fontSize: 11, color: '#ffc46b',
+        }}>
+          <span style={{ width: 9, height: 9, borderRadius: 2, background: '#ffa733', flexShrink: 0 }} />
+          {highlightLabel || 'Highlighted elements'}
+          {' — '}
+          {hitCount > 0
+            ? `${hitCount} element${hitCount === 1 ? '' : 's'} on model`
+            : 'no matching geometry found'}
+        </div>
+      )}
     </div>
   )
-}
+})
+
+export default IFCViewer
 
 function Overlay({ children }) {
   return (

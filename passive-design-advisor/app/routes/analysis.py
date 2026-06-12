@@ -2,12 +2,20 @@
 /api/analysis — Run the full pipeline (Stages 2–5) for a session.
 Accepts site coordinates, rotation offset, and building use.
 Returns scored strategies + thermal diagnosis.
+
+Two entry points:
+  POST /api/analysis/run         — classic request/response
+  POST /api/analysis/run-stream  — SSE: stage progress events, then the result
+
+Endpoints are plain `def` so FastAPI runs them in its threadpool — the
+pipeline is CPU/IO heavy and must not block the event loop.
 """
 
 import json
 from copy import deepcopy
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.models import (
     AnalysisRequest, AnalysisResponse,
@@ -15,7 +23,7 @@ from app.models import (
 )
 from app.session import session_store
 from src.context_enricher import enrich
-from src.ifc_parser import BuildingFeatures
+from src.ifc_parser import BuildingFeatures, degrees_to_label
 from src.recommender import generate_report
 from src.strategy_scorer import score_all_strategies
 from src.thermal_diagnosis import diagnose
@@ -31,7 +39,6 @@ def _apply_rotation(building: BuildingFeatures, offset_deg: float) -> BuildingFe
     if offset_deg == 0.0:
         return building
 
-    from src.ifc_parser import degrees_to_label
     rotated = deepcopy(building)
     for facade in rotated.facades:
         new_deg = (facade.orientation_deg + offset_deg) % 360
@@ -40,48 +47,19 @@ def _apply_rotation(building: BuildingFeatures, offset_deg: float) -> BuildingFe
     return rotated
 
 
-@router.post("/run", response_model=AnalysisResponse)
-async def run_analysis(req: AnalysisRequest):
+def _prepare_building(req: AnalysisRequest) -> BuildingFeatures:
     session = session_store.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found. Upload an IFC file first.")
 
-    building: BuildingFeatures = session["building"]
-
-    # Apply user rotation and update site coordinates
-    building = deepcopy(building)
+    building: BuildingFeatures = deepcopy(session["building"])
     building.site_latitude  = req.site_lat
     building.site_longitude = req.site_lon
     building.building_use   = req.building_use
-    building = _apply_rotation(building, req.rotation_offset_deg)
+    return _apply_rotation(building, req.rotation_offset_deg)
 
-    # Stage 2
-    try:
-        context = enrich(
-            req.site_lat, req.site_lon,
-            building_height_m=building.number_of_floors * building.floor_to_ceiling_height_m,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Context enrichment failed: {e}")
 
-    # Stage 3
-    try:
-        diagnosis = diagnose(building, context, shgc=req.shgc)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Thermal diagnosis failed: {e}")
-
-    # Stage 4
-    ranked_scores = score_all_strategies(building, context)
-
-    # Stage 5 (optional)
-    try:
-        report = generate_report(building, context, diagnosis, ranked_scores, skip_llm=req.skip_llm)
-        session["report"] = report
-        session["context"] = context
-        session["diagnosis"] = diagnosis
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Recommendation generation failed: {e}")
-
+def _build_response(req, context, diagnosis, report) -> AnalysisResponse:
     return AnalysisResponse(
         session_id=req.session_id,
         site=SiteResult(
@@ -117,4 +95,85 @@ async def run_analysis(req: AnalysisRequest):
             )
             for s in report.strategies
         ],
+    )
+
+
+def _run_pipeline(req: AnalysisRequest, building: BuildingFeatures):
+    """Run stages 2–5, storing results in the session. Yields after each stage."""
+    session = session_store[req.session_id]
+
+    yield "enrich", "Analysing site context (SVF, street canyon, comfort zone)…"
+    context = enrich(
+        req.site_lat, req.site_lon,
+        building_height_m=building.number_of_floors * building.floor_to_ceiling_height_m,
+    )
+
+    yield "diagnose", "Running thermal diagnosis (solar gains per facade)…"
+    diagnosis = diagnose(building, context, shgc=req.shgc)
+
+    yield "score", "Scoring passive strategies (MAUT)…"
+    ranked_scores = score_all_strategies(building, context)
+
+    yield "recommend", "Generating recommendations…"
+    report = generate_report(building, context, diagnosis, ranked_scores, skip_llm=req.skip_llm)
+
+    session["report"] = report
+    session["context"] = context
+    session["diagnosis"] = diagnosis
+    yield "done", _build_response(req, context, diagnosis, report)
+
+
+STAGE_ERRORS = {
+    "enrich": "Context enrichment failed",
+    "diagnose": "Thermal diagnosis failed",
+    "score": "Strategy scoring failed",
+    "recommend": "Recommendation generation failed",
+}
+
+
+@router.post("/run", response_model=AnalysisResponse)
+def run_analysis(req: AnalysisRequest):
+    building = _prepare_building(req)
+
+    stage = "enrich"
+    try:
+        for stage, payload in _run_pipeline(req, building):
+            if stage == "done":
+                return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{STAGE_ERRORS.get(stage, 'Analysis failed')}: {e}")
+
+    raise HTTPException(status_code=500, detail="Analysis did not complete.")
+
+
+@router.post("/run-stream")
+def run_analysis_stream(req: AnalysisRequest):
+    """
+    Same pipeline, but streamed as Server-Sent Events so the UI can show
+    per-stage progress. Events:
+      data: {"stage": "enrich", "label": "..."}      (one per stage start)
+      data: {"stage": "done", "result": {...}}        (AnalysisResponse)
+      data: {"stage": "error", "detail": "..."}       (on failure)
+    """
+    building = _prepare_building(req)
+
+    def events():
+        stage = "enrich"
+        try:
+            for stage, payload in _run_pipeline(req, building):
+                if stage == "done":
+                    yield "data: " + json.dumps(
+                        {"stage": "done", "result": payload.model_dump()}
+                    ) + "\n\n"
+                else:
+                    yield "data: " + json.dumps({"stage": stage, "label": payload}) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps(
+                {"stage": "error", "detail": f"{STAGE_ERRORS.get(stage, 'Analysis failed')}: {e}"}
+            ) + "\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
