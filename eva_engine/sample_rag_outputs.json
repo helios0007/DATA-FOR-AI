@@ -1,0 +1,50 @@
+[
+  {
+    "id": "example_question",
+    "answer": "External insulation can help create a continuous insulation layer and reduce thermal bridges [Example Source Title, page 13].",
+    "retrieved_chunks": [
+      {
+        "text": "External insulation provides a continuous insulation coat around the building and helps avoid thermal bridges.",
+        "metadata": {
+          "source_title": "Example Source Title",
+          "source_id": "EXAMPLE_SOURCE",
+          "page": 13
+        },
+        "score": 0.91
+      }
+    ],
+    "graph_context": {
+      "strategy": "shading",
+      "nodes": [
+        {
+          "id": "shading",
+          "type": "strategy",
+          "label": "shading"
+        },
+        {
+          "id": "shading_fixed_louvers",
+          "type": "design_option",
+          "label": "Fixed horizontal louvers"
+        },
+        {
+          "id": "szokolay_2004",
+          "type": "paper",
+          "label": "Szokolay 2004"
+        }
+      ],
+      "edges": [
+        {
+          "source": "shading",
+          "target": "shading_fixed_louvers",
+          "relation": "has_variant"
+        },
+        {
+          "source": "shading",
+          "target": "szokolay_2004",
+          "relation": "justified_by"
+        }
+      ],
+      "literature_sources": ["szokolay_2004"]
+    }
+  }
+]

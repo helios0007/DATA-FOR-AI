@@ -1,0 +1,19 @@
+[
+  {
+    "id": "example_question",
+    "question": "What does the document say about external insulation?",
+    "expected_sources": [
+      {
+        "source_title": "Example Source Title",
+        "pages": [13]
+      }
+    ],
+    "required_answer_terms": ["external insulation", "thermal bridges"],
+    "forbidden_answer_terms": ["internal insulation is always preferred"],
+    "expected_strategy": "shading",
+    "expected_graph_nodes": ["shading", "shading_fixed_louvers", "szokolay_2004"],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["szokolay_2004"],
+    "notes": "Replace this sample with project-specific gold questions."
+  }
+]
