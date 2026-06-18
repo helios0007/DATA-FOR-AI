@@ -167,6 +167,14 @@ Quick smoke test:
 python eva_engine\evaluate_rag.py --runs eva_engine\sample_rag_outputs.json
 ```
 
+For Claude judge mode, set:
+
+```env
+JUDGE_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_key_here
+ANTHROPIC_MODEL=claude-3-5-haiku-latest
+```
+
 ## Copilot Integration Prompt
 
 Use this prompt with GitHub Copilot Chat, ChatGPT, or another coding assistant when adding this evaluation engine to an existing RAG project:

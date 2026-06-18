@@ -98,6 +98,14 @@ GEMINI_API_KEY=your_key_here
 GEMINI_MODEL=gemini-2.0-flash
 ```
 
+For Claude:
+
+```env
+JUDGE_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_key_here
+ANTHROPIC_MODEL=claude-3-5-haiku-latest
+```
+
 For Ollama:
 
 ```env
@@ -157,4 +165,3 @@ expected_literature_sources
 ```powershell
 python -m py_compile eva_engine\evaluate_rag.py
 ```
-

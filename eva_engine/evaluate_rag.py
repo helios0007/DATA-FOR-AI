@@ -29,7 +29,7 @@ JUDGE_KEYS = [
 ]
 
 
-def load_dotenv(path: Path) -> None:
+def load_dotenv(path: Path, override: bool = False) -> None:
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -37,7 +37,12 @@ def load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if override:
+            os.environ[key] = value
+        else:
+            os.environ.setdefault(key, value)
 
 
 def normalize_text(value: str) -> str:
@@ -350,6 +355,27 @@ def gemini_text(system_instructions: str, prompt: str) -> str:
     return "".join(part.get("text", "") for part in parts).strip()
 
 
+def anthropic_text(system_instructions: str, prompt: str) -> str:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is missing.")
+    try:
+        from anthropic import Anthropic
+    except ModuleNotFoundError as error:
+        raise RuntimeError("The anthropic package is not installed. Run: pip install anthropic") from error
+
+    client = Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+        max_tokens=800,
+        system=system_instructions,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(
+        block.text for block in response.content if getattr(block, "type", "") == "text"
+    ).strip()
+
+
 def ollama_text(system_instructions: str, prompt: str) -> str:
     payload = {
         "model": os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
@@ -375,13 +401,39 @@ def ollama_text(system_instructions: str, prompt: str) -> str:
 
 def generate_judge_text(system_instructions: str, prompt: str) -> str:
     provider = os.getenv("JUDGE_PROVIDER", os.getenv("LLM_PROVIDER", "openai")).lower()
-    if provider == "openai":
-        return openai_text(system_instructions, prompt)
-    if provider == "gemini":
-        return gemini_text(system_instructions, prompt)
-    if provider == "ollama":
-        return ollama_text(system_instructions, prompt)
-    raise RuntimeError(f"Unsupported JUDGE_PROVIDER: {provider}")
+    if provider == "chatgpt":
+        provider = "openai"
+    if provider == "claude":
+        provider = "anthropic"
+
+    providers = [provider]
+    if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+        providers = ["ollama"]
+    elif provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        providers = ["ollama"]
+    elif provider == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
+        providers = ["ollama"]
+    elif provider not in {"openai", "gemini", "anthropic", "ollama"}:
+        providers = ["ollama"]
+    elif provider != "ollama":
+        providers.append("ollama")
+
+    errors = []
+    for candidate in providers:
+        try:
+            if candidate == "openai":
+                return openai_text(system_instructions, prompt)
+            if candidate == "gemini":
+                return gemini_text(system_instructions, prompt)
+            if candidate == "anthropic":
+                return anthropic_text(system_instructions, prompt)
+            if candidate == "ollama":
+                return ollama_text(system_instructions, prompt)
+        except Exception as error:
+            errors.append(f"{candidate}: {error}")
+            continue
+
+    raise RuntimeError("All judge providers failed. " + " | ".join(errors))
 
 
 def extract_json_object(text: str) -> dict:
@@ -584,7 +636,9 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+    engine_dir = Path(__file__).resolve().parent
+    load_dotenv(engine_dir.parent / ".env")
+    load_dotenv(engine_dir / ".env", override=True)
     args = parse_args()
     if not args.runs and not args.rag_command:
         raise SystemExit("Provide --runs or --rag-command.")
