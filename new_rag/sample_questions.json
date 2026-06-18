@@ -1,0 +1,43 @@
+[
+  {
+    "id": "external_insulation_physics",
+    "question": "Why is external insulation preferred from a building physics perspective?",
+    "expected_strategy": "external_insulation",
+    "expected_source_titles": [
+      "Building Envelope Retrofit Solution Booklet"
+    ]
+  },
+  {
+    "id": "windows_shading_overheating",
+    "question": "How should windows and shading be improved during retrofit to avoid summer overheating?",
+    "expected_strategy": "windows_shading",
+    "expected_source_titles": [
+      "Retrofit Strategies Design Guide",
+      "Building Envelope Retrofit Solution Booklet"
+    ]
+  },
+  {
+    "id": "roof_attic_vapour_barrier",
+    "question": "What should be considered for vapour barriers in roof or attic insulation?",
+    "expected_strategy": "roof_attic",
+    "expected_source_titles": [
+      "Building Envelope Retrofit Solution Booklet"
+    ]
+  },
+  {
+    "id": "hvac_services_prefab_modules",
+    "question": "What should be considered when integrating HVAC or service modules into a retrofit?",
+    "expected_strategy": "hvac_services",
+    "expected_source_titles": [
+      "Retrofit Strategies Design Guide"
+    ]
+  },
+  {
+    "id": "solar_integration_shading",
+    "question": "What factors can reduce the performance of solar thermal or photovoltaic integration?",
+    "expected_strategy": "solar_integration",
+    "expected_source_titles": [
+      "Retrofit Strategies Design Guide"
+    ]
+  }
+]

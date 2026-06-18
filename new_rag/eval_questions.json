@@ -1,0 +1,102 @@
+[
+  {
+    "id": "external_insulation_physics",
+    "question": "Why is external insulation preferred from a building physics perspective?",
+    "expected_sources": [
+      {
+        "source_title": "Building Envelope Retrofit Solution Booklet",
+        "pages": [13]
+      }
+    ],
+    "expected_strategy": "external_insulation",
+    "expected_graph_nodes": [
+      "external_insulation",
+      "continuous_external_insulation",
+      "building_envelope_solution_booklet"
+    ],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["building_envelope_solution_booklet"],
+    "required_answer_terms": [],
+    "forbidden_answer_terms": []
+  },
+  {
+    "id": "windows_shading_overheating",
+    "question": "How should windows and shading be improved during retrofit to avoid summer overheating?",
+    "expected_sources": [
+      {
+        "source_title": "Retrofit Strategies Design Guide",
+        "pages": [92]
+      }
+    ],
+    "expected_strategy": "windows_shading",
+    "expected_graph_nodes": [
+      "windows_shading",
+      "external_shading",
+      "retrofit_strategies_design_guide"
+    ],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["retrofit_strategies_design_guide"],
+    "required_answer_terms": [],
+    "forbidden_answer_terms": []
+  },
+  {
+    "id": "roof_attic_vapour_barrier",
+    "question": "What should be considered for vapour barriers in roof or attic insulation?",
+    "expected_sources": [
+      {
+        "source_title": "Building Envelope Retrofit Solution Booklet",
+        "pages": [18]
+      }
+    ],
+    "expected_strategy": "roof_attic",
+    "expected_graph_nodes": [
+      "roof_attic",
+      "warm_side_vapour_barrier",
+      "building_envelope_solution_booklet"
+    ],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["building_envelope_solution_booklet"],
+    "required_answer_terms": [],
+    "forbidden_answer_terms": []
+  },
+  {
+    "id": "hvac_services_prefab_modules",
+    "question": "What should be considered when integrating HVAC or service modules into a retrofit?",
+    "expected_sources": [
+      {
+        "source_title": "Retrofit Strategies Design Guide",
+        "pages": [99]
+      }
+    ],
+    "expected_strategy": "hvac_services",
+    "expected_graph_nodes": [
+      "hvac_services",
+      "centralised_service_concept",
+      "retrofit_strategies_design_guide"
+    ],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["retrofit_strategies_design_guide"],
+    "required_answer_terms": [],
+    "forbidden_answer_terms": []
+  },
+  {
+    "id": "solar_integration_shading",
+    "question": "What factors can reduce the performance of solar thermal or photovoltaic integration?",
+    "expected_sources": [
+      {
+        "source_title": "Retrofit Strategies Design Guide",
+        "pages": [103]
+      }
+    ],
+    "expected_strategy": "solar_integration",
+    "expected_graph_nodes": [
+      "solar_integration",
+      "facade_pv",
+      "retrofit_strategies_design_guide"
+    ],
+    "expected_relations": ["has_variant", "justified_by"],
+    "expected_literature_sources": ["retrofit_strategies_design_guide"],
+    "required_answer_terms": [],
+    "forbidden_answer_terms": []
+  }
+]
